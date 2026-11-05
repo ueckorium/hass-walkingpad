@@ -11,11 +11,14 @@ recovery, and pending speed management are all handled by the library.
 """
 
 import asyncio
+import contextlib
 import logging
 from enum import Enum, unique
 
+import bleak_retry_connector
 from bleak.backends.device import BLEDevice
 from bleak.exc import BleakError
+from ph4_walkingpad.pad import Controller as _Ph4Controller
 
 import walkingpad_controller.controller as _wpc_controller
 from walkingpad_controller import (
@@ -33,6 +36,41 @@ from walkingpad_controller import (
 _wpc_controller.MAX_CONNECT_RETRIES = 1
 
 from .const import WalkingPadMode, WalkingPadStatus
+
+# ph4-walkingpad, used for WiLink pads such as the A1 Pro, connects with a
+# bare BleakClient and leaves the link open when setup fails after connecting.
+# The pad accepts only one connection, so every later attempt fails until the
+# pad drops that link by itself, and a whole walk can go unrecorded. Connect
+# like the FTMS and Sperax paths do, and on a failed setup clear the possibly
+# stale GATT cache and close the link.
+_ph4_original_run = _Ph4Controller.run
+
+
+async def _ph4_connect(self: _Ph4Controller, address: BLEDevice) -> None:
+    """Connect through bleak_retry_connector instead of a bare BleakClient."""
+    # Looked up at call time: Home Assistant swaps in its own client class
+    # only once Bluetooth is set up, which can be after this module loads.
+    self.client = await bleak_retry_connector.establish_connection(
+        bleak_retry_connector.BleakClientWithServiceCache,
+        address,
+        address.name or address.address,
+    )
+
+
+async def _ph4_run_closing_on_failure(self: _Ph4Controller, address: BLEDevice) -> None:
+    """Run ph4's connect and setup, closing the link if setup fails."""
+    try:
+        await _ph4_original_run(self, address)
+    except BaseException:  # also on cancellation, or the link stays open
+        with contextlib.suppress(Exception):
+            await self.client.clear_cache()
+        with contextlib.suppress(Exception):
+            await self.disconnect()
+        raise
+
+
+_Ph4Controller.connect = _ph4_connect
+_Ph4Controller.run = _ph4_run_closing_on_failure
 
 _LOGGER = logging.getLogger(__name__)
 

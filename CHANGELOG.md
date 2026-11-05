@@ -8,6 +8,17 @@ Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **WiLink pads (e.g. A1 Pro) no longer get stuck on a half-open
+  connection.** When setup failed after connecting, `ph4-walkingpad` left the
+  BLE link open. The pad accepts only one connection, so reconnects failed
+  with `ESP_GATT_ERROR` until the pad dropped the link, and whole walks went
+  unrecorded. WiLink now connects through
+  `bleak_retry_connector.establish_connection()` like FTMS and Sperax (up to
+  four attempts per connect), and a failed setup clears the GATT cache and
+  closes the link.
+
 ## [0.5.1] - 2026-08-16
 
 ### Fixed
